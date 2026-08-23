@@ -96,10 +96,13 @@ def main() -> int:
             headers=H1,
         )
         history = client.get(f"/api/orders/{order['id']}/messages", headers=H1).json()
-        assert len(history) == 2 and history[1]["mine"] is True, history
+        user_msgs = [m for m in history if m["sender_id"] is not None]
+        sys_texts = [m["body"] for m in history if m["sender_id"] is None]
+        assert len(user_msgs) == 2 and any("всё в методичке" in (m["body"] or "") and m["mine"] for m in user_msgs), history
+        assert any("оплачен" in t for t in sys_texts) and any("взял заказ" in t for t in sys_texts), sys_texts
         outsider = client.get(f"/api/orders/{order['id']}/messages", headers=H3)
         assert outsider.status_code == 403
-        print("chat: 2 messages, outsider rejected")
+        print(f"chat: {len(history)} messages ({len(sys_texts)} system), outsider rejected")
 
         client.post(
             f"/api/orders/{order['id']}/deliver",

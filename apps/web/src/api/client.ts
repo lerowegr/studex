@@ -116,6 +116,20 @@ export const api = {
 
   subscriptions: () => request<Subject[]>("/subscriptions"),
 
+  updateOrder: (id: string, body: Partial<OrderCreateInput>) =>
+    request<OrderDetail>(`/orders/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  addOrderFile: (id: string, key: string) =>
+    request<{ id: string; file_name: string }>(`/orders/${id}/files`, {
+      method: "POST",
+      body: JSON.stringify({ key }),
+    }),
+  removeOrderFile: (id: string, fileId: string) =>
+    request<{ ok: boolean }>(`/orders/${id}/files/${fileId}`, { method: "DELETE" }),
+
+  chatState: (id: string) => request<{ unread: number }>(`/orders/${id}/chat/state`),
+  chatMarkRead: (id: string) =>
+    request<{ ok: boolean }>(`/orders/${id}/chat/read`, { method: "POST" }),
+
   adminStats: () => request<Record<string, number>>("/admin/stats"),
   adminDisputes: () =>
     request<
@@ -137,6 +151,16 @@ export const api = {
     request<{ ok: boolean }>(`/admin/users/${userId}/ban${qs({ reason })}`, {
       method: "POST",
     }),
+
+  adminCreateSubject: (body: { name: string; course: number; program: string; emoji?: string }) =>
+    request<{ id: number }>("/admin/subjects", { method: "POST", body: JSON.stringify(body) }),
+  adminUpdateSubject: (id: number, body: { name: string; course: number; program: string; emoji?: string }) =>
+    request<{ ok: boolean }>(`/admin/subjects/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+  adminDeleteSubject: (id: number) =>
+    request<{ ok: boolean }>(`/admin/subjects/${id}`, { method: "DELETE" }),
 
   upload: async (file: File): Promise<UploadOut> => {
     const fd = new FormData()

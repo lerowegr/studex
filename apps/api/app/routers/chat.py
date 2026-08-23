@@ -8,14 +8,15 @@ from pydantic import BaseModel
 from app.auth import get_current_user, validate_init_data
 from app.config import get_settings
 from app.db import SessionLocal, get_session
-from app.models import Chat, Message, Order, User
+from app.models import Chat, ChatRead, Message, Order, User
 
 settings = get_settings()
 router = APIRouter(tags=["chat"])
 
 
 class MessageBody(BaseModel):
-    body: str
+    body: str = ""
+    file_key: str | None = None
 
 
 async def _participant_order(session, order_id: uuid.UUID, user: User) -> Order:
@@ -38,6 +39,68 @@ async def _get_or_create_chat(session, order_id: uuid.UUID) -> Chat:
         session.add(chat)
         await session.flush()
     return chat
+
+
+async def unread_count(session, chat: Chat, user: User) -> int:
+    read = (
+        await session.execute(
+            sa.select(ChatRead).where(
+                ChatRead.chat_id == chat.id, ChatRead.user_id == user.id
+            )
+        )
+    ).scalar_one_or_none()
+    last_read = read.last_read_message_id if read else 0
+    return (
+        await session.execute(
+            sa.select(sa.func.count())
+            .select_from(Message)
+            .where(
+                Message.chat_id == chat.id,
+                Message.id > last_read,
+                Message.sender_id != user.id,
+            )
+        )
+    ).scalar_one()
+
+
+async def mark_read(session, chat: Chat, user: User) -> None:
+    max_id = (
+        await session.execute(
+            sa.select(sa.func.coalesce(sa.func.max(Message.id), 0)).where(
+                Message.chat_id == chat.id
+            )
+        )
+    ).scalar_one()
+    read = (
+        await session.execute(
+            sa.select(ChatRead).where(
+                ChatRead.chat_id == chat.id, ChatRead.user_id == user.id
+            )
+        )
+    ).scalar_one_or_none()
+    if read is None:
+        session.add(ChatRead(chat_id=chat.id, user_id=user.id, last_read_message_id=max_id))
+    else:
+        read.last_read_message_id = max(read.last_read_message_id, max_id)
+    await session.commit()
+
+
+async def system_message(session, order_id: uuid.UUID, text: str) -> None:
+    chat = await _get_or_create_chat(session, order_id)
+    msg = Message(chat_id=chat.id, sender_id=None, body=text[:4000])
+    session.add(msg)
+    await session.flush()
+    await manager.broadcast(
+        order_id,
+        {
+            "id": msg.id,
+            "sender_id": None,
+            "sender_name": "Система",
+            "body": msg.body,
+            "created_at": msg.created_at.isoformat(),
+            "mine": False,
+        },
+    )
 
 
 class ConnectionManager:
@@ -86,6 +149,7 @@ async def list_messages(
             "sender_id": str(m.sender_id) if m.sender_id else None,
             "sender_name": u.full_name if u else "Система",
             "body": m.body,
+            "file_key": m.file_key,
             "created_at": m.created_at.isoformat(),
             "mine": bool(m.sender_id == user.id),
         }
@@ -101,11 +165,16 @@ async def send_message(
     session=Depends(get_session),
 ):
     await _participant_order(session, order_id, user)
-    if not payload.body.strip():
+    if not payload.body.strip() and not payload.file_key:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Empty message")
 
     chat = await _get_or_create_chat(session, order_id)
-    msg = Message(chat_id=chat.id, sender_id=user.id, body=payload.body.strip()[:4000])
+    msg = Message(
+        chat_id=chat.id,
+        sender_id=user.id,
+        body=payload.body.strip()[:4000],
+        file_key=payload.file_key,
+    )
     session.add(msg)
     await session.commit()
 
@@ -114,11 +183,38 @@ async def send_message(
         "sender_id": str(user.id),
         "sender_name": user.full_name,
         "body": msg.body,
+        "file_key": msg.file_key,
         "created_at": msg.created_at.isoformat(),
         "mine": True,
     }
     await manager.broadcast(order_id, {**result, "mine": False})
     return result
+
+
+@router.get("/orders/{order_id}/chat/state")
+async def chat_state(
+    order_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+    session=Depends(get_session),
+):
+    order = await _participant_order(session, order_id, user)
+    chat = (
+        await session.execute(sa.select(Chat).where(Chat.order_id == order.id))
+    ).scalar_one_or_none()
+    unread = await unread_count(session, chat, user) if chat else 0
+    return {"unread": unread}
+
+
+@router.post("/orders/{order_id}/chat/read")
+async def chat_mark_read(
+    order_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+    session=Depends(get_session),
+):
+    order = await _participant_order(session, order_id, user)
+    chat = await _get_or_create_chat(session, order.id)
+    await mark_read(session, chat, user)
+    return {"ok": True}
 
 
 @router.websocket("/ws/orders/{order_id}")

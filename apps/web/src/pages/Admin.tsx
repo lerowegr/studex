@@ -1,15 +1,19 @@
 import { motion } from "motion/react"
-import { Gavel, ShieldCheck, Trash2 } from "lucide-react"
+import { BookOpen, Gavel, Pencil, Plus, ShieldCheck, Trash2, X } from "lucide-react"
 import { useState } from "react"
 
 import {
   useAdminDisputes,
   useAdminStats,
+  useDeleteSubject,
   useInvalidate,
   useMe,
+  useSaveSubject,
+  useSubjects,
 } from "../api/hooks"
 import { api } from "../api/client"
-import { Button, Card, EmptyState, Page, Skeleton } from "../components/ui"
+import type { Subject } from "../api/types"
+import { Button, Card, EmptyState, Input, Page, Skeleton } from "../components/ui"
 import { rubFromKop } from "../lib/format"
 import { notify } from "../lib/telegram"
 
@@ -18,6 +22,133 @@ const OUTCOMES: Array<{ value: string; label: string; variant: "success" | "dang
   { value: "customer", label: "Заказчику", variant: "danger" },
   { value: "split", label: "50/50", variant: "ghost" },
 ]
+
+interface Draft {
+  id?: number
+  emoji: string
+  name: string
+  course: number
+  program: string
+}
+
+const EMPTY_DRAFT: Draft = { emoji: "", name: "", course: 1, program: "БИ" }
+
+function SubjectsManager() {
+  const { data: subjects } = useSubjects()
+  const save = useSaveSubject()
+  const del = useDeleteSubject()
+  const [draft, setDraft] = useState<Draft | null>(null)
+
+  const startEdit = (s: Subject) =>
+    setDraft({ id: s.id, emoji: s.emoji ?? "", name: s.name, course: s.course, program: s.program })
+
+  const submit = () => {
+    if (!draft || draft.name.trim().length < 2) return
+    save.mutate(
+      {
+        id: draft.id,
+        name: draft.name.trim(),
+        course: draft.course,
+        program: draft.program,
+        emoji: draft.emoji || undefined,
+      },
+      {
+        onSuccess: () => {
+          notify("success")
+          setDraft(null)
+        },
+        onError: () => notify("error"),
+      }
+    )
+  }
+
+  return (
+    <Card className="mb-4 space-y-3 p-4">
+      <p className="flex items-center gap-1.5 text-sm font-semibold">
+        <BookOpen className="size-4 text-cyan" /> Предметы
+        <span className="ml-auto text-xs font-normal text-mist">{subjects?.length ?? 0} шт.</span>
+      </p>
+
+      {!draft && (
+        <Button size="sm" variant="outline" onClick={() => setDraft({ ...EMPTY_DRAFT })}>
+          <Plus className="size-3.5" /> Добавить предмет
+        </Button>
+      )}
+
+      {draft && (
+        <div className="space-y-2 rounded-2xl border border-violet/30 bg-violet/5 p-3">
+          <div className="flex gap-2">
+            <Input
+              value={draft.emoji}
+              onChange={(e) => setDraft({ ...draft, emoji: e.target.value })}
+              placeholder="📐"
+              className="w-14 text-center"
+            />
+            <Input
+              autoFocus
+              value={draft.name}
+              onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+              placeholder="Название предмета"
+            />
+          </div>
+          <div className="flex gap-2">
+            {[1, 2, 3, 4].map((c) => (
+              <button
+                key={c}
+                onClick={() => setDraft({ ...draft, course: c })}
+                className={`flex-1 rounded-xl border py-2 text-xs font-semibold transition-colors ${
+                  draft.course === c
+                    ? "border-violet bg-violet/20 text-fog"
+                    : "border-white/10 bg-white/5 text-mist"
+                }`}
+              >
+                {c} к.
+              </button>
+            ))}
+            <Input
+              value={draft.program}
+              onChange={(e) => setDraft({ ...draft, program: e.target.value.toUpperCase() })}
+              placeholder="БИ"
+              className="w-16 text-center"
+            />
+          </div>
+          <div className="flex gap-2">
+            <Button size="sm" className="flex-1" loading={save.isPending} disabled={draft.name.trim().length < 2} onClick={submit}>
+              Сохранить
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => setDraft(null)}>
+              <X className="size-3.5" /> Отмена
+            </Button>
+          </div>
+        </div>
+      )}
+
+      <div className="max-h-64 space-y-1 overflow-y-auto pr-1">
+        {subjects?.map((s) => (
+          <motion.div key={s.id} layout className="flex items-center gap-2 rounded-xl px-2 py-1.5 hover:bg-white/5">
+            <span className="text-lg">{s.emoji ?? "📘"}</span>
+            <span className="min-w-0 flex-1 truncate text-sm">{s.name}</span>
+            <span className="shrink-0 text-[10px] text-mist">{s.course}к · {s.program}</span>
+            <button onClick={() => startEdit(s)} className="text-mist hover:text-fog">
+              <Pencil className="size-3.5" />
+            </button>
+            <button
+              onClick={() => {
+                if (confirm(`Удалить «${s.name}»?`))
+                  del.mutate(s.id, {
+                    onError: (e) => alert(e instanceof Error ? e.message : "Ошибка"),
+                  })
+              }}
+              className="text-mist hover:text-rose"
+            >
+              <Trash2 className="size-3.5" />
+            </button>
+          </motion.div>
+        ))}
+      </div>
+    </Card>
+  )
+}
 
 export function Admin() {
   const { data: me } = useMe()
@@ -89,6 +220,8 @@ export function Admin() {
       <h2 className="mb-2 mt-5 flex items-center gap-1.5 font-display text-base font-bold">
         <Gavel className="size-4 text-violet" /> Споры
       </h2>
+
+      <SubjectsManager />
 
       {disputesLoading ? (
         <Skeleton className="h-32" />

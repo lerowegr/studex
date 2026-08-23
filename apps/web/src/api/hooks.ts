@@ -154,3 +154,29 @@ export function useAdminStats() {
 export function useAdminDisputes() {
   return useQuery({ queryKey: ["admin", "disputes"], queryFn: api.adminDisputes })
 }
+
+export function useAdminSubjects(course: number | null) {
+  return useSubjects(course ?? undefined)
+}
+
+export function useSaveSubject() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async ({
+      id,
+      ...body
+    }: { id?: number; name: string; course: number; program: string; emoji?: string }) => {
+      const res = id ? await api.adminUpdateSubject(id, body) : await api.adminCreateSubject(body)
+      return { ok: true as const, newId: "id" in res ? res.id : undefined }
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["subjects"] }),
+  })
+}
+
+export function useDeleteSubject() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: number) => api.adminDeleteSubject(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["subjects"] }),
+  })
+}

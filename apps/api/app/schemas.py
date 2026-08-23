@@ -140,3 +140,11 @@ class UploadOut(BaseModel):
     url: str
     file_name: str
     size_bytes: int
+
+
+class OrderUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=4, max_length=200)
+    description: str | None = Field(default=None, max_length=4000)
+    category: OrderCategoryLiteral | None = None
+    price_rub: float | None = Field(default=None, gt=0, le=1_000_000)
+    deadline: datetime | None = None

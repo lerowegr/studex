@@ -1,7 +1,9 @@
+import { useQueryClient } from "@tanstack/react-query"
 import { AnimatePresence, motion } from "motion/react"
-import { SendHorizontal } from "lucide-react"
+import { FileText, Paperclip, SendHorizontal } from "lucide-react"
 import { useEffect, useRef, useState } from "react"
 
+import { api, fileUrl } from "../api/client"
 import { useMessages, useSendMessage } from "../api/hooks"
 import type { ChatMessage } from "../api/types"
 import { Button } from "./ui"
@@ -44,6 +46,30 @@ export function Chat({ orderId }: { orderId: string }) {
     (m, i, arr) => arr.findIndex((x) => x.id === m.id) === i
   )
 
+  useEffect(() => {
+    if (serverMessages && serverMessages.length >= 0) {
+      api.chatMarkRead(orderId).catch(() => {})
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orderId, serverMessages !== undefined])
+
+  const [attaching, setAttaching] = useState(false)
+  const attachRef = useRef<HTMLInputElement>(null)
+  const qc = useQueryClient()
+
+  const onAttach = async (file: File | undefined) => {
+    if (!file) return
+    setAttaching(true)
+    try {
+      const res = await api.upload(file)
+      await api.sendMessage(orderId, res.key)
+      await qc.invalidateQueries({ queryKey: ["messages", orderId] })
+    } catch {
+    } finally {
+      setAttaching(false)
+    }
+  }
+
   const submit = () => {
     const body = text.trim()
     if (!body) return
@@ -73,6 +99,11 @@ export function Chat({ orderId }: { orderId: string }) {
                 animate={{ opacity: 1, y: 0 }}
                 className={`flex ${m.mine ? "justify-end" : "justify-start"}`}
               >
+                {m.sender_id === null ? (
+                  <div className="mx-auto rounded-full bg-white/5 border border-white/10 px-3 py-1 text-center text-[11px] text-mist">
+                    {m.body}
+                  </div>
+                ) : (
                 <div
                   className={`max-w-[80%] rounded-2xl px-3 py-2 text-sm ${
                     m.mine
@@ -85,11 +116,17 @@ export function Chat({ orderId }: { orderId: string }) {
                       {m.sender_name}
                     </p>
                   )}
-                  <p className="whitespace-pre-wrap break-words">{m.body}</p>
+                  {m.body && <p className="whitespace-pre-wrap break-words">{m.body}</p>}
+                  {m.file_key && (
+                    <a href={fileUrl(m.file_key)} download className="mt-1 flex items-center gap-1.5 rounded-lg bg-black/20 px-2 py-1 text-xs underline">
+                      <FileText className="size-3" /> Вложение
+                    </a>
+                  )}
                   <p className="mt-0.5 text-right text-[9px] opacity-60">
                     {dateTimeFull(m.created_at)}
                   </p>
                 </div>
+                )}
               </motion.div>
             ))}
           </AnimatePresence>
@@ -108,11 +145,19 @@ export function Chat({ orderId }: { orderId: string }) {
           submit()
         }}
       >
+        <input ref={attachRef} type="file" className="hidden" onChange={(e) => onAttach(e.target.files?.[0])} />
+        <button
+          type="button"
+          onClick={() => attachRef.current?.click()}
+          className="grid size-10 shrink-0 place-items-center rounded-xl bg-white/5 border border-white/10 text-mist hover:text-fog"
+        >
+          <Paperclip className={`size-4 ${attaching ? "animate-pulse text-violet" : ""}`} />
+        </button>
         <input
           value={text}
           onChange={(e) => setText(e.target.value)}
           placeholder="Сообщение..."
-          className="flex-1 rounded-xl border border-white/10 bg-white/5 px-3 py-2.5 text-sm outline-none placeholder:text-mist/60 focus:border-violet/60"
+          className="min-w-0 flex-1 rounded-xl border border-white/10 bg-white/5 px-3 py-2.5 text-sm outline-none placeholder:text-mist/60 focus:border-violet/60"
         />
         <Button size="sm" type="submit" loading={send.isPending} disabled={!text.trim()} className="w-11 px-0">
           <SendHorizontal className="size-4" />

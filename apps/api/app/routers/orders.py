@@ -25,10 +25,14 @@ from app.models import (
     Upload,
     User,
 )
+from app.routers.chat import system_message
+from pydantic import BaseModel
+
 from app.schemas import (
     OrderCardOut,
     OrderCreate,
     OrderDetailOut,
+    OrderUpdate,
     ReviewCreate,
     ReviewOut,
 )
@@ -268,6 +272,7 @@ async def pay_order(
         hold.status = TxStatus.succeeded
 
     order.status = OrderStatus.paid
+    await system_message(session, order.id, "💰 Заказ оплачен — деньги заморожены в эскроу. Ждём исполнителя")
     await _fanout_new_order(session, order)
     await session.commit()
     return await _detail(session, order, user)
@@ -324,6 +329,7 @@ async def take_order(
     order.executor_id = user.id
     order.status = OrderStatus.in_work
     order.taken_at = _now()
+    await system_message(session, order.id, f"💼 Исполнитель взял заказ: {user.full_name}")
     from app.services.notify import notify
 
     await notify(
@@ -370,6 +376,7 @@ async def deliver_order(
     order.status = OrderStatus.delivered
     order.delivered_at = now
     order.auto_confirm_at = now + timedelta(hours=settings.auto_confirm_hours)
+    await system_message(session, order.id, "📤 Работа сдана. У заказчика 72 часа на проверку")
 
     from app.services.notify import notify
 
@@ -400,6 +407,7 @@ async def complete_order(
 
     order.status = OrderStatus.completed
     order.completed_at = _now()
+    await system_message(session, order.id, "✅ Сделка завершена — выплата исполнителю в обработке")
 
     hold = (
         await session.execute(
@@ -491,6 +499,7 @@ async def open_dispute(
     if existing is None:
         session.add(Dispute(order_id=order.id, opened_by=user.id, reason=reason[:2000]))
     order.status = OrderStatus.disputed
+    await system_message(session, order.id, "⚠️ Открыт спор — деньги заморожены до решения арбитража")
 
     from app.services.notify import notify, notify_admins
 
@@ -540,6 +549,7 @@ async def cancel_order(
     ).scalar_one_or_none()
 
     order.status = OrderStatus.cancelled
+    await system_message(session, order.id, "🚫 Заказ отменён заказчиком")
     if hold is not None:
         hold.status = TxStatus.failed
     await session.commit()
@@ -618,3 +628,101 @@ async def dispute_status(
         "reason": dispute.reason,
         "resolution_note": dispute.resolution_note,
     }
+
+
+@router.patch("/{order_id}", response_model=OrderDetailOut)
+async def update_order(
+    order_id: uuid.UUID,
+    body: OrderUpdate,
+    user: User = Depends(get_current_user),
+    session=Depends(get_session),
+):
+    order = await _load_order(session, order_id)
+    if order is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Order not found")
+    if order.customer_id != user.id:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Only customer can edit")
+    if order.status != OrderStatus.awaiting_payment:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "Editing available before payment only"
+        )
+
+    data = body.model_dump(exclude_unset=True)
+    if not data:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Nothing to update")
+    if "deadline" in data and body.deadline and body.deadline <= _now():
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Deadline must be in future")
+
+    if "price_rub" in data and data["price_rub"] is not None:
+        order.price_kop = _kop(data.pop("price_rub"))
+    for field, value in data.items():
+        setattr(order, field, value)
+
+    await system_message(session, order.id, "✏️ Заказчик обновил параметры заказа")
+    await session.commit()
+    return await _detail(session, order, user)
+
+
+class FileKeyBody(BaseModel):
+    key: str
+
+
+@router.post("/{order_id}/files", status_code=201)
+async def add_order_file(
+    order_id: uuid.UUID,
+    payload: FileKeyBody,
+    user: User = Depends(get_current_user),
+    session=Depends(get_session),
+):
+    order = await _load_order(session, order_id)
+    if order is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Order not found")
+    if order.customer_id != user.id:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Only customer can attach files")
+    if order.status != OrderStatus.awaiting_payment:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Files locked after payment")
+
+    upload = (
+        await session.execute(sa.select(Upload).where(Upload.key == payload.key))
+    ).scalar_one_or_none()
+    if upload is None or upload.owner_id != user.id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Unknown upload")
+
+    file = OrderFile(
+        order_id=order.id,
+        kind=FileKind.task,
+        s3_key=payload.key,
+        file_name=upload.file_name,
+        size_bytes=upload.size_bytes,
+    )
+    session.add(file)
+    await session.commit()
+    await session.refresh(file)
+    return {"id": str(file.id), "file_name": file.file_name}
+
+
+@router.delete("/{order_id}/files/{file_id}")
+async def remove_order_file(
+    order_id: uuid.UUID,
+    file_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+    session=Depends(get_session),
+):
+    order = await _load_order(session, order_id)
+    if order is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Order not found")
+    if order.customer_id != user.id or order.status != OrderStatus.awaiting_payment:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Not allowed at this stage")
+
+    file = (
+        await session.execute(
+            sa.select(OrderFile).where(
+                OrderFile.id == file_id, OrderFile.order_id == order.id
+            )
+        )
+    ).scalar_one_or_none()
+    if file is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "File not found")
+    await session.delete(file)
+    await session.commit()
+    return {"ok": True}

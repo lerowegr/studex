@@ -31,7 +31,7 @@ export function CreateOrder() {
   const [description, setDescription] = useState("")
   const [price, setPrice] = useState("")
   const [deadline, setDeadline] = useState(defaultDeadline())
-  const [upload, setUpload] = useState<{ key: string; name: string } | null>(null)
+  const [uploads, setUploads] = useState<Array<{ key: string; name: string }>>([])
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
@@ -51,7 +51,7 @@ export function CreateOrder() {
     setError(null)
     try {
       const res = await api.upload(file)
-      setUpload({ key: res.key, name: res.file_name })
+      setUploads((prev) => [...prev, { key: res.key, name: res.file_name }])
       notify("success")
     } catch (e) {
       setError(e instanceof Error ? e.message : "Ошибка загрузки")
@@ -71,10 +71,14 @@ export function CreateOrder() {
         description: description.trim() || undefined,
         price_rub: Number(price),
         deadline: new Date(deadline).toISOString(),
-        task_file_key: upload?.key,
       },
       {
-        onSuccess: (order) => {
+        onSuccess: async (order) => {
+          for (const f of uploads) {
+            try {
+              await api.addOrderFile(order.id, f.key)
+            } catch {}
+          }
           notify("success")
           navigate(`/orders/${order.id}`, { replace: true })
         },
@@ -142,24 +146,23 @@ export function CreateOrder() {
           accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.md,.csv,.png,.jpg,.jpeg,.zip,.rar,.7z"
           onChange={(e) => onFile(e.target.files?.[0])}
         />
+        {uploads.map((f, i) => (
+          <motion.div key={f.key} initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} className="glass flex items-center gap-2 rounded-xl px-3 py-2 text-xs">
+            <CheckCircle2 className="size-3.5 shrink-0 text-lime" />
+            <span className="min-w-0 flex-1 truncate">{f.name}</span>
+            <button onClick={() => setUploads((u) => u.filter((_, j) => j !== i))} className="text-mist hover:text-rose">✕</button>
+          </motion.div>
+        ))}
         <motion.button
           type="button"
           whileTap={{ scale: 0.98 }}
           onClick={() => fileRef.current?.click()}
-          className="glass flex w-full items-center gap-3 rounded-2xl p-4 text-left"
+          className="glass flex w-full items-center gap-3 rounded-2xl p-3.5 text-left"
         >
-          {upload ? (
-            <CheckCircle2 className="size-5 text-lime" />
-          ) : (
-            <UploadCloud className={`size-5 ${uploading ? "animate-pulse text-violet" : "text-mist"}`} />
-          )}
+          <UploadCloud className={`size-5 ${uploading ? "animate-pulse text-violet" : "text-mist"}`} />
           <span className="min-w-0 flex-1">
-            <span className="block text-sm font-semibold">
-              {uploading ? "Загружаю..." : upload ? upload.name : "Прикрепить задание"}
-            </span>
-            <span className="block text-xs text-mist">
-              {upload ? "Файл загружен ✓" : "PDF, DOCX, XLSX, ZIP — до 20 МБ"}
-            </span>
+            <span className="block text-sm font-semibold">{uploading ? "Загружаю..." : "Прикрепить файлы задания"}</span>
+            <span className="block text-xs text-mist">Можно несколько · PDF, DOCX, ZIP — до 20 МБ</span>
           </span>
         </motion.button>
 

@@ -84,6 +84,7 @@ export interface ChatMessage {
   sender_id: string | null
   sender_name: string | null
   body: string | null
+  file_key?: string | null
   created_at: string
   mine: boolean
 }

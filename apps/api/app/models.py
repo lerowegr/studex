@@ -255,6 +255,17 @@ class Chat(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class ChatRead(Base):
+    __tablename__ = "chat_reads"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    chat_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("chats.id"))
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
+    last_read_message_id: Mapped[int] = mapped_column(BigInteger, default=0)
+
+    __table_args__ = (UniqueConstraint("chat_id", "user_id", name="uq_chat_read"),)
+
+
 class Message(Base):
     __tablename__ = "messages"
 

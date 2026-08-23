@@ -15,8 +15,12 @@ import { useState } from "react"
 import { useNavigate, useParams } from "react-router-dom"
 
 import {
+  api,
+} from "../api/client"
+import {
   useDeliver,
   useDispute,
+  useInvalidate,
   useMe,
   useOrder,
   useOrderAction,
@@ -27,7 +31,7 @@ import { fileUrl } from "../api/client"
 import { Chat } from "../components/Chat"
 import { Confetti } from "../components/Confetti"
 import { StatusBadge } from "../components/StatusBadge"
-import { Button, Card, EmptyState, Page, Skeleton, Textarea } from "../components/ui"
+import { Button, Card, EmptyState, Field, Input, Page, Skeleton, Textarea } from "../components/ui"
 import { categoryLabels, dateTimeFull, deadlineLabel, rubFromKop } from "../lib/format"
 import { haptic, notify } from "../lib/telegram"
 import { cn } from "../lib/utils"
@@ -97,6 +101,8 @@ export function OrderDetail() {
   const [celebrate, setCelebrate] = useState(false)
   const [disputeOpen, setDisputeOpen] = useState(false)
   const [reason, setReason] = useState("")
+  const [editing, setEditing] = useState(false)
+  const [editForm, setEditForm] = useState({ title: "", description: "", price: "", deadline: "" })
   const [rating, setRating] = useState(0)
   const [reviewComment, setReviewComment] = useState("")
   const [reviewed, setReviewed] = useState(false)
@@ -203,11 +209,52 @@ export function OrderDetail() {
             <p className="text-sm text-amber">
               💳 Оплата подключается в спринте 3 (ЮKassa). Сейчас заказ виден только тебе.
             </p>
-            <Button variant="danger" size="sm" loading={action.isPending} onClick={() => action.mutate({ kind: "cancel" })}>
-              Отменить заказ
-            </Button>
+            <div className="flex gap-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setEditing(!editing)
+                  setEditForm({
+                    title: order.title,
+                    description: order.description ?? "",
+                    price: String(order.price_kop / 100),
+                    deadline: new Date(order.deadline).toISOString().slice(0, 16),
+                  })
+                }}
+              >
+                {editing ? "Свернуть" : "Редактировать"}
+              </Button>
+              <Button variant="danger" size="sm" loading={action.isPending} onClick={() => action.mutate({ kind: "cancel" })}>
+                Отменить заказ
+              </Button>
+            </div>
           </Card>
         )}
+
+        <AnimatePresence>
+          {editing && isCustomer && order.status === "awaiting_payment" && (
+            <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }}>
+              <Card className="space-y-3 p-4">
+                <Field label="Название">
+                  <Input value={editForm.title} onChange={(e) => setEditForm({ ...editForm, title: e.target.value })} />
+                </Field>
+                <Field label="Детали">
+                  <Textarea value={editForm.description} onChange={(e) => setEditForm({ ...editForm, description: e.target.value })} />
+                </Field>
+                <div className="grid grid-cols-2 gap-3">
+                  <Field label="Цена, ₽">
+                    <Input inputMode="numeric" value={editForm.price} onChange={(e) => setEditForm({ ...editForm, price: e.target.value.replace(/\D/g, "") })} />
+                  </Field>
+                  <Field label="Дедлайн">
+                    <Input type="datetime-local" value={editForm.deadline} onChange={(e) => setEditForm({ ...editForm, deadline: e.target.value })} />
+                  </Field>
+                </div>
+                <SaveEdits order={order} form={editForm} onDone={() => setEditing(false)} />
+              </Card>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         {!isCustomer && !isExecutor && order.status === "paid" && (
           <Button
@@ -347,5 +394,46 @@ export function OrderDetail() {
 
       <div className="pb-28" />
     </Page>
+  )
+}
+
+function SaveEdits({
+  order,
+  form,
+  onDone,
+}: {
+  order: { id: string }
+  form: { title: string; description: string; price: string; deadline: string }
+  onDone: () => void
+}) {
+  const invalidate = useInvalidate()
+  const [saving, setSaving] = useState(false)
+
+  return (
+    <Button
+      className="w-full"
+      loading={saving}
+      disabled={form.title.trim().length < 4 || !form.price}
+      onClick={async () => {
+        setSaving(true)
+        try {
+          await api.updateOrder(order.id, {
+            title: form.title.trim(),
+            description: form.description.trim() || undefined,
+            price_rub: Number(form.price),
+            deadline: new Date(form.deadline).toISOString(),
+          })
+          invalidate("order", "feed", "mine")
+          onDone()
+          notify("success")
+        } catch {
+          notify("error")
+        } finally {
+          setSaving(false)
+        }
+      }}
+    >
+      Сохранить изменения
+    </Button>
   )
 }

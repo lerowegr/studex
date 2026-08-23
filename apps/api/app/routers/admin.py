@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 
 import sqlalchemy as sa
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.auth import get_current_user
 from app.db import get_session
@@ -220,5 +220,98 @@ async def ban_user(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
     target.is_banned = True
     target.ban_reason = reason[:500]
+    await session.commit()
+    return {"ok": True}
+
+
+class SubjectBody(BaseModel):
+    name: str = Field(min_length=2, max_length=128)
+    course: int = Field(ge=1, le=6)
+    program: str = Field(max_length=64)
+    emoji: str | None = Field(default=None, max_length=16)
+
+
+@router.post("/subjects", status_code=201)
+async def create_subject(
+    body: SubjectBody,
+    _admin: User = Depends(require_admin),
+    session=Depends(get_session),
+):
+    from app.models import Subject
+
+    dup = (
+        await session.execute(
+            sa.select(sa.func.count())
+            .select_from(Subject)
+            .where(
+                Subject.name == body.name.strip(),
+                Subject.course == body.course,
+                Subject.program == body.program,
+            )
+        )
+    ).scalar_one()
+    if dup:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Such subject already exists")
+
+    subject = Subject(
+        name=body.name.strip(), course=body.course, program=body.program, emoji=body.emoji
+    )
+    session.add(subject)
+    await session.commit()
+    await session.refresh(subject)
+    return {"id": subject.id, "name": subject.name}
+
+
+@router.patch("/subjects/{subject_id}")
+async def update_subject(
+    subject_id: int,
+    body: SubjectBody,
+    _admin: User = Depends(require_admin),
+    session=Depends(get_session),
+):
+    from app.models import Subject
+
+    subject = (
+        await session.execute(sa.select(Subject).where(Subject.id == subject_id))
+    ).scalar_one_or_none()
+    if subject is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Subject not found")
+
+    subject.name = body.name.strip()
+    subject.course = body.course
+    subject.program = body.program
+    subject.emoji = body.emoji
+    await session.commit()
+    return {"ok": True}
+
+
+@router.delete("/subjects/{subject_id}")
+async def delete_subject(
+    subject_id: int,
+    _admin: User = Depends(require_admin),
+    session=Depends(get_session),
+):
+    from app.models import ExecutorSubject, Order, QuizAttempt, Subject, Subscription
+
+    subject = (
+        await session.execute(sa.select(Subject).where(Subject.id == subject_id))
+    ).scalar_one_or_none()
+    if subject is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Subject not found")
+
+    used = (
+        await session.execute(
+            sa.select(sa.func.count()).select_from(Order).where(Order.subject_id == subject_id)
+        )
+    ).scalar_one()
+    if used:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"Cannot delete: {used} order(s) reference this subject",
+        )
+
+    for model in (ExecutorSubject, Subscription, QuizAttempt):
+        await session.execute(sa.delete(model).where(model.subject_id == subject_id))
+    await session.delete(subject)
     await session.commit()
     return {"ok": True}
