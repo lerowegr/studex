@@ -55,7 +55,7 @@ export function Button({
       whileTap={{ scale: 0.96 }}
       transition={{ type: "spring", stiffness: 500, damping: 30 }}
       className={cn(
-        "inline-flex select-none items-center justify-center gap-2 font-semibold disabled:opacity-50 disabled:pointer-events-none",
+        "inline-flex select-none items-center justify-center gap-2 font-semibold outline-none focus-visible:ring-2 focus-visible:ring-violet focus-visible:ring-offset-2 focus-visible:ring-offset-ink disabled:opacity-50 disabled:pointer-events-none",
         buttonVariants[variant],
         buttonSizes[size],
         className
@@ -130,7 +130,7 @@ export function Chip({
 }
 
 export function Skeleton({ className }: { className?: string }) {
-  return <div className={cn("animate-pulse rounded-2xl bg-white/5", className)} />
+  return <div className={cn("skeleton-shimmer rounded-2xl", className)} />
 }
 
 export function EmptyState({

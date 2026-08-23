@@ -125,3 +125,43 @@ async def read_all_notifications(
     )
     await session.commit()
     return {"ok": True}
+
+
+@router.get("/chat-unreads")
+async def chat_unreads(
+    user: User = Depends(get_current_user),
+    session=Depends(get_session),
+):
+    from app.models import Chat, ChatRead, Message, Order
+
+    rows = (
+        await session.execute(
+            sa.select(Chat.order_id, Chat.id)
+            .join(Order, Order.id == Chat.order_id)
+            .where(sa.or_(Order.customer_id == user.id, Order.executor_id == user.id))
+        )
+    ).all()
+    out: dict[str, int] = {}
+    for order_id, chat_id in rows:
+        read = (
+            await session.execute(
+                sa.select(ChatRead).where(
+                    ChatRead.chat_id == chat_id, ChatRead.user_id == user.id
+                )
+            )
+        ).scalar_one_or_none()
+        last_read = read.last_read_message_id if read else 0
+        cnt = (
+            await session.execute(
+                sa.select(sa.func.count())
+                .select_from(Message)
+                .where(
+                    Message.chat_id == chat_id,
+                    Message.id > last_read,
+                    Message.sender_id != user.id,
+                )
+            )
+        ).scalar_one()
+        if cnt:
+            out[str(order_id)] = cnt
+    return out

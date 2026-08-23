@@ -1,6 +1,7 @@
 import { motion } from "motion/react"
 import { ArrowUpRight, Clock } from "lucide-react"
 import { useNavigate } from "react-router-dom"
+import { useChatUnreads } from "../api/hooks"
 
 import { categoryLabels, deadlineLabel, rubFromKop } from "../lib/format"
 import { cn } from "../lib/utils"
@@ -9,6 +10,8 @@ import type { OrderCard as OrderCardType } from "../api/types"
 export function OrderCard({ order, index = 0 }: { order: OrderCardType; index?: number }) {
   const navigate = useNavigate()
   const dl = deadlineLabel(order.deadline)
+  const { data: unreads } = useChatUnreads()
+  const unread = order.status !== "awaiting_payment" ? (unreads?.[order.id] ?? 0) : 0
 
   return (
     <motion.button
@@ -29,7 +32,17 @@ export function OrderCard({ order, index = 0 }: { order: OrderCardType; index?: 
           </div>
           <p className="truncate font-semibold leading-snug">{order.title}</p>
         </div>
-        <ArrowUpRight className="mt-1 size-4 shrink-0 text-mist" />
+        {unread > 0 ? (
+          <motion.span
+            initial={{ scale: 0 }}
+            animate={{ scale: 1 }}
+            className="grid min-w-5 shrink-0 place-items-center rounded-full bg-gradient-to-r from-violet to-cyan px-1.5 py-0.5 text-[10px] font-bold text-white"
+          >
+            💬{unread}
+          </motion.span>
+        ) : (
+          <ArrowUpRight className="mt-1 size-4 shrink-0 text-mist" />
+        )}
       </div>
 
       <div className="mt-3 flex items-center justify-between">

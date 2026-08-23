@@ -44,7 +44,6 @@ async def push_batch(session) -> list[dict]:
         await session.execute(
             sa.select(Notification)
             .where(Notification.sent_at.is_(None))
-            .where(Notification.type.notin_(["chat_message"]))
             .order_by(Notification.created_at)
             .limit(50)
         )

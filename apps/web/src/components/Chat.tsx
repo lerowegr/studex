@@ -22,25 +22,49 @@ export function Chat({ orderId }: { orderId: string }) {
   const [live, setLive] = useState<ChatMessage[]>([])
   const [wsOpen, setWsOpen] = useState(false)
   const [text, setText] = useState("")
+  const [peerTyping, setPeerTyping] = useState<string | null>(null)
+  const [attaching, setAttaching] = useState(false)
+  const typingSentAt = useRef(0)
+  const attachRef = useRef<HTMLInputElement>(null)
+  const qc = useQueryClient()
+  const wsRef = useRef<WebSocket | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     const ws = new WebSocket(wsUrl(orderId))
+    wsRef.current = ws
     ws.onopen = () => setWsOpen(true)
     ws.onmessage = (event) => {
       try {
-        const msg = JSON.parse(event.data) as ChatMessage
+        const parsed = JSON.parse(event.data) as ChatMessage & { type?: string; from?: string; name?: string }
+        if (parsed.type === "typing") {
+          if (parsed.from && parsed.name) {
+            setPeerTyping(parsed.name.split(" ")[0])
+            setTimeout(() => setPeerTyping(null), 2500)
+          }
+          return
+        }
+        const msg = parsed as ChatMessage
         if (!msg || msg.id === undefined) return
         setLive((prev) => (prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]))
+        setPeerTyping(null)
       } catch {}
     }
     ws.onclose = () => setWsOpen(false)
     return () => ws.close()
   }, [orderId])
 
+  const sendTyping = () => {
+    const now = Date.now()
+    if (wsRef.current?.readyState === WebSocket.OPEN && now - typingSentAt.current > 1800) {
+      typingSentAt.current = now
+      wsRef.current.send(JSON.stringify({ type: "typing" }))
+    }
+  }
+
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" })
-  }, [serverMessages?.length, live.length])
+  }, [serverMessages?.length, live.length, peerTyping])
 
   const messages: ChatMessage[] = [...(serverMessages ?? []), ...live].filter(
     (m, i, arr) => arr.findIndex((x) => x.id === m.id) === i
@@ -52,10 +76,6 @@ export function Chat({ orderId }: { orderId: string }) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [orderId, serverMessages !== undefined])
-
-  const [attaching, setAttaching] = useState(false)
-  const attachRef = useRef<HTMLInputElement>(null)
-  const qc = useQueryClient()
 
   const onAttach = async (file: File | undefined) => {
     if (!file) return
@@ -83,7 +103,18 @@ export function Chat({ orderId }: { orderId: string }) {
         <p className="text-xs font-semibold uppercase tracking-wider text-mist">
           Чат сделки · анонимно
         </p>
-        <span className={`size-1.5 rounded-full ${wsOpen ? "bg-lime" : "bg-amber"}`} />
+        {peerTyping ? (
+          <motion.span initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex items-center gap-1 text-[10px] text-cyan">
+            печатает
+            {[0, 1, 2].map((i) => (
+              <motion.span key={i} animate={{ opacity: [0.2, 1, 0.2] }} transition={{ repeat: Infinity, duration: 1.2, delay: i * 0.2 }}>
+                •
+              </motion.span>
+            ))}
+          </motion.span>
+        ) : (
+          <span className={`size-1.5 rounded-full ${wsOpen ? "bg-lime" : "bg-amber"}`} />
+        )}
       </div>
 
       <div className="max-h-72 min-h-24 space-y-2 overflow-y-auto px-1">
@@ -155,7 +186,10 @@ export function Chat({ orderId }: { orderId: string }) {
         </button>
         <input
           value={text}
-          onChange={(e) => setText(e.target.value)}
+          onChange={(e) => {
+            setText(e.target.value)
+            sendTyping()
+          }}
           placeholder="Сообщение..."
           className="min-w-0 flex-1 rounded-xl border border-white/10 bg-white/5 px-3 py-2.5 text-sm outline-none placeholder:text-mist/60 focus:border-violet/60"
         />

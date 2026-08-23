@@ -126,6 +126,7 @@ export const api = {
   removeOrderFile: (id: string, fileId: string) =>
     request<{ ok: boolean }>(`/orders/${id}/files/${fileId}`, { method: "DELETE" }),
 
+  chatUnreads: () => request<Record<string, number>>("/me/chat-unreads"),
   chatState: (id: string) => request<{ unread: number }>(`/orders/${id}/chat/state`),
   chatMarkRead: (id: string) =>
     request<{ ok: boolean }>(`/orders/${id}/chat/read`, { method: "POST" }),

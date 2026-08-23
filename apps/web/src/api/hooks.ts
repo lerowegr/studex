@@ -180,3 +180,11 @@ export function useDeleteSubject() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["subjects"] }),
   })
 }
+
+export function useChatUnreads() {
+  return useQuery({
+    queryKey: ["chat-unreads"],
+    queryFn: api.chatUnreads,
+    refetchInterval: 8000,
+  })
+}

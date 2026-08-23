@@ -41,6 +41,25 @@ async def _get_or_create_chat(session, order_id: uuid.UUID) -> Chat:
     return chat
 
 
+async def _notify_new_message(session, order_id: uuid.UUID, sender_id: uuid.UUID, preview: str) -> None:
+    from app.services.notify import notify
+
+    order = (
+        await session.execute(sa.select(Order).where(Order.id == order_id))
+    ).scalar_one_or_none()
+    if order is None:
+        return
+    other = order.executor_id if order.customer_id == sender_id else order.customer_id
+    await notify(
+        session,
+        other,
+        "chat_message",
+        f"💬 Новое сообщение по сделке: {preview}",
+        {"order_id": str(order.id)},
+        push=True,
+    )
+
+
 async def unread_count(session, chat: Chat, user: User) -> int:
     read = (
         await session.execute(
@@ -187,6 +206,10 @@ async def send_message(
         "created_at": msg.created_at.isoformat(),
         "mine": True,
     }
+    await _notify_new_message(
+        session, order_id, user.id, (msg.body or "вложение")[:80]
+    )
+    await session.commit()
     await manager.broadcast(order_id, {**result, "mine": False})
     return result
 
@@ -260,13 +283,22 @@ async def ws_chat(ws: WebSocket, order_id: uuid.UUID):
                 data = json.loads(raw)
             except ValueError:
                 continue
+            if data.get("type") == "typing":
+                await manager.broadcast(
+                    order_id,
+                    {"type": "typing", "from": str(user.id), "name": user.full_name},
+                )
+                continue
             body = str(data.get("body", ""))[:4000].strip()
-            if not body:
+            file_key = data.get("file_key")
+            if not body and not file_key:
                 continue
             async with SessionLocal() as session:
                 chat = await _get_or_create_chat(session, order_id)
-                msg = Message(chat_id=chat.id, sender_id=user.id, body=body)
+                msg = Message(chat_id=chat.id, sender_id=user.id, body=body, file_key=file_key)
                 session.add(msg)
+                await session.flush()
+                await _notify_new_message(session, order_id, user.id, (body or "вложение")[:80])
                 await session.commit()
                 await manager.broadcast(
                     order_id,
@@ -275,6 +307,7 @@ async def ws_chat(ws: WebSocket, order_id: uuid.UUID):
                         "sender_id": str(user.id),
                         "sender_name": user.full_name,
                         "body": msg.body,
+                        "file_key": msg.file_key,
                         "created_at": msg.created_at.isoformat(),
                         "mine": False,
                     },
